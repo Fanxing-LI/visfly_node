@@ -1,0 +1,5 @@
+<launch>
+    <!-- Start only VisFly with Elastic mode -->
+    <node pkg="visfly" type="visfly.py" name="visfly" output="screen" 
+          args="--traj B --velocity 2.0 --comment elastic"/>
+</launch>

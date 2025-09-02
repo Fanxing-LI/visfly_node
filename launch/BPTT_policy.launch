@@ -1,0 +1,5 @@
+<launch>
+    <!-- 启动debug_actor_publisher -->
+    <node pkg="visfly" type="BPTT_policy.py" name="BPTT" output="screen"/>
+
+</launch>

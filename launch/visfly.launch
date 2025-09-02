@@ -1,0 +1,12 @@
+<launch>
+    <!-- 启动自定义节点 -->
+    <node pkg="visfly" type="visfly_wrapper.py" name="visfly" output="screen" 
+          args="--traj 8 --velocity 1.0 --comment BPTT"/>
+    
+    <!-- 可选：启动其他节点（如 roscore 会自动启动） -->
+    <!-- <node pkg="rostopic" type="rostopic" name="listener" args="echo chatter" output="screen"/> -->
+
+    <!-- 启动debug_actor_publisher -->
+    <!-- <node pkg="visfly" type="debug_actor_publisher.py" name="debug_actor_publisher" output="screen"/> -->
+
+</launch>

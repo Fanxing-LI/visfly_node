@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Load EKF configuration (process/measurement noise, dt limits) -->
+    <rosparam file="$(find visfly)/config/ekf_cfg.yaml" command="load" />
+
+    <!-- Optional overrides (uncomment to override YAML values) -->
+    <!-- <param name="ekf/q/pos" value="0.02" /> -->
+    <!-- <param name="ekf/r/pos" value="0.05" /> -->
+
+    <!-- EKF Node for state estimation -->
+    <node name="ekf_node" pkg="visfly" type="ekf_node.py" output="screen">
+        <!-- Remap input odom topic if needed -->
+        <remap from="~odom" to="/visfly/drone_0/odom" />
+    </node>
+
+    <!-- Optional: RViz for visualization -->
+    <arg name="rviz" default="false" />
+    <node if="$(arg rviz)" name="rviz" pkg="rviz" type="rviz" args="-d $(find visfly)/config/ekf_visualization.rviz" />
+</launch>
