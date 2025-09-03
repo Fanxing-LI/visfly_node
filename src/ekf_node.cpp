@@ -78,6 +78,7 @@ public:
     float qpos=0.01f,qvel=0.1f,qacc=1.f,rpos=0.1f,rvel=0.2f; 
     float ema_pos=0.f, ema_vel=0.f; int ma_pos=1, ma_vel=1; 
     double max_dt=1.0, min_dt=0.0005;
+    double target_hz=0.0;  // Target EKF update frequency (0 = no limit)
     if(!cfg_path.empty()){
       try{
         YAML::Node root = YAML::LoadFile(cfg_path);
@@ -94,6 +95,7 @@ public:
             ma_vel = ekf["ma_window_vel"].as<int>(ma_vel);
             max_dt = ekf["max_dt"].as<double>(max_dt);
             min_dt = ekf["min_dt"].as<double>(min_dt);
+            target_hz = ekf["target_hz"].as<double>(target_hz);
         }
       }catch(const std::exception& e){
         ROS_WARN_STREAM("Failed to load YAML config: "<<e.what());
@@ -101,7 +103,7 @@ public:
     }
     ekf_.reset(new EKF9D(qpos,qvel,qacc,rpos,rvel));
     ema_alpha_pos_=ema_pos; ema_alpha_vel_=ema_vel; ma_window_pos_=ma_pos; ma_window_vel_=ma_vel;
-    max_dt_=max_dt; min_dt_=min_dt;
+    max_dt_=max_dt; min_dt_=min_dt; target_hz_=target_hz;
     if(ma_window_pos_>1) pos_hist_.set_capacity(ma_window_pos_);
     if(ma_window_vel_>1) vel_hist_.set_capacity(ma_window_vel_);
 
@@ -130,7 +132,8 @@ public:
     }
 
     ROS_INFO_STREAM("EKF C++ node started q_pos="<<qpos<<" q_vel="<<qvel<<" q_acc="<<qacc
-                    <<" r_pos="<<rpos<<" r_vel="<<rvel<<" ema_pos="<<ema_alpha_pos_<<" ema_vel="<<ema_alpha_vel_);
+                    <<" r_pos="<<rpos<<" r_vel="<<rvel<<" ema_pos="<<ema_alpha_pos_<<" ema_vel="<<ema_alpha_vel_
+                    <<" target_hz="<<target_hz_);
   }
 private:
   template<typename T>
@@ -145,6 +148,17 @@ private:
 
   void odomCb(const nav_msgs::OdometryConstPtr& msg){
     ros::Time stamp = msg->header.stamp.isZero()? ros::Time::now(): msg->header.stamp;
+    
+    // Frequency limiting: skip if not enough time has passed
+    if(target_hz_ > 0.0 && !last_ekf_time_.isZero()) {
+      double min_interval = 1.0 / target_hz_;
+      double time_since_last = (stamp - last_ekf_time_).toSec();
+      if(time_since_last < min_interval) {
+        ROS_DEBUG_THROTTLE(5.0, "Skipping EKF update: %.3fs < %.3fs", time_since_last, min_interval);
+        return;  // Skip this update to maintain target frequency
+      }
+    }
+    
     ROS_INFO_THROTTLE(1.0, "Received odom message, pos=(%.3f,%.3f,%.3f) vel=(%.3f,%.3f,%.3f)", 
                       msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z,
                       msg->twist.twist.linear.x, msg->twist.twist.linear.y, msg->twist.twist.linear.z);
@@ -152,6 +166,8 @@ private:
     double dt = (stamp - last_meas_time_).toSec();
     if(dt>0) ekf_->predict(static_cast<float>(dt));
     last_meas_time_ = stamp;
+    last_ekf_time_ = stamp;  // Update EKF processing time
+    
     // Fill measurement vector
     Eigen::Matrix<float,13,1> z; z.setZero();
     z(0)=msg->pose.pose.position.x; z(1)=msg->pose.pose.position.y; z(2)=msg->pose.pose.position.z;
@@ -187,10 +203,12 @@ private:
   ros::Subscriber odom_sub_;
   ros::Publisher odom_pub_;
   ros::Time last_meas_time_;
+  ros::Time last_ekf_time_;  // Time of last EKF processing
 
   float ema_alpha_pos_{0.f}, ema_alpha_vel_{0.f};
   int ma_window_pos_{1}, ma_window_vel_{1};
   double max_dt_{1.0}, min_dt_{0.0005};
+  double target_hz_{0.0};  // Target EKF update frequency
 
   // Filtering state
   Eigen::Vector3f ema_pos_; bool ema_pos_init_{false};

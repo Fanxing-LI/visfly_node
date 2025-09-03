@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0.2)
-project(visfly)
+project(visfly_node)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
 # add_compile_options(-std=c++11)
@@ -121,15 +121,15 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
 )
 
-add_executable(ekf_cpp_node src/ekf_node.cpp)
-target_compile_features(ekf_cpp_node PRIVATE cxx_std_14)
-target_compile_options(ekf_cpp_node PRIVATE -O3 -Wall -Wextra -Wno-unused-parameter)
+add_executable(visfly_ekf_node src/ekf_node.cpp)
+target_compile_features(visfly_ekf_node PRIVATE cxx_std_14)
+target_compile_options(visfly_ekf_node PRIVATE -O3 -Wall -Wextra -Wno-unused-parameter)
 if (yaml-cpp_FOUND)
-  target_link_libraries(ekf_cpp_node PRIVATE yaml-cpp)
+  target_link_libraries(visfly_ekf_node PRIVATE yaml-cpp)
 endif()
-target_link_libraries(ekf_cpp_node PRIVATE ${catkin_LIBRARIES})
+target_link_libraries(visfly_ekf_node PRIVATE ${catkin_LIBRARIES})
 
-install(TARGETS ekf_cpp_node RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+install(TARGETS visfly_ekf_node RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 ## Declare a C++ library
 # add_library(${PROJECT_NAME}

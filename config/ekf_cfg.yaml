@@ -1,14 +1,14 @@
 # EKF configuration for ekf_node
 # Adjust process and measurement noise, publish rate, and dt limits.
 ekf:
-  predict_rate: 30.0          # Hz
+  target_hz: 60.0             # Target EKF update frequency (0 = no limit)
   max_dt: 1.0                 # Max accepted dt between odom messages
   min_dt: 0.0005              # Ignore dt smaller than this (s)
   # --- 滤波策略: EMA + 小窗口MA双重平滑 ---
-  ma_window_pos: 1            # 3点滑动平均进一步平滑位置
-  ma_window_vel: 1            # 速度保持单点（EMA足够）
-  ema_alpha_pos: 0.08         # EMA α (位置) - 更强平滑抑制步伐波动
-  ema_alpha_vel: 0.12         # EMA α (速度) - 适度平滑
+  ma_window_pos: 20            # 3点滑动平均进一步平滑位置
+  ma_window_vel: 20            # 速度保持单点（EMA足够）
+  ema_alpha_pos: 0.4         # EMA α (位置) - 更强平滑抑制步伐波动
+  ema_alpha_vel: 0.4         # EMA α (速度) - 适度平滑
   # Updated smoothing set (stronger velocity damping)
   # Rationale:
   #  - Reduce q_vel (process noise on velocity) to slow velocity random walk
@@ -20,12 +20,12 @@ ekf:
   # 说明：相比之前强平滑，将 q_vel / q_acc 稍增大，提高对真实动态的跟随；
   #       同时适当降低 r_vel / r_pos，减少对量测的抑制，EMA 再做末端平滑。
   q:
-    pos: 0.000001      # ↓ 进一步减小位置过程噪声，最强平滑
+    pos: 0.00001      # ↓ 进一步减小位置过程噪声，最强平滑
     vel: 0.00003       # ↓ 减小速度过程噪声
     acc: 0.000005      # ↓ 减小加速度过程噪声
   r:
-    pos: 0.8          # ↓ 更信任位置测量，减少EKF内部抖动
-    vel: 0.8           # ↑ 较少信任速度测量，更多依赖EKF预测
+    pos: 0.2          # ↓ 更信任位置测量，减少EKF内部抖动
+    vel: 0.2           # ↑ 较少信任速度测量，更多依赖EKF预测
 
   # 旧参数参考 (如需回退):
   # old_strong_q:
