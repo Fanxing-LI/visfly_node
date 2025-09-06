@@ -24,6 +24,7 @@ USE_EKF = True
 ACTION_TOPIC_PREFIX = "BPTT/drone_{}/action"
 ODOM_TOPIC_PREFIX = "visfly/drone_{}/odom"
 TARGET_ODOM_TOPIC = "visfly/target/odom"
+CTRL_FREQ = 33
 INFO_PRINT_FREQ = 30
 
 # for real world 
@@ -379,8 +380,7 @@ class BPTTPolicy:
     def run(self):
         """Run BPTT Policy node"""
         rospy.loginfo("BPTT Policy starting in event-driven mode")
-        freq = 60
-        rate = rospy.Rate(freq)  # Set rate to 33Hz for any periodic tasks if needed
+        rate = rospy.Rate(CTRL_FREQ)  # Set rate to 33Hz for any periodic tasks if needed
         while True:
             if rospy.is_shutdown():
                 break
