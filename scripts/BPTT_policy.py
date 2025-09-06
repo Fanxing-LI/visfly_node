@@ -12,20 +12,26 @@ add_path = remove_last_n_folders(os.path.dirname(os.path.abspath(__file__)), 4)
 sys.path.append(add_path)
 print(add_path)
 
+# ===================================================================================
 
 # ONNX model filename (will be combined with current file directory)
 ONNX_MODEL_FILENAME = "SHAC_NoCaliHeadV_Pos_Dis3.0_spd3.4_lessNoise_2_policy.onnx"
+ONNX_MODEL_FILENAME = "SHAC_deploy_5_policy.onnx"
 
 DEBUG = True
 REAL_WORLD = True  # Set to True when running in real-world environment
 USE_EKF = True
 
+CTRL_FREQ = 30
+INFO_PRINT_FREQ = 30
+
+# ===================================================================================
+
 # Action topic prefix configuration
 ACTION_TOPIC_PREFIX = "BPTT/drone_{}/action"
 ODOM_TOPIC_PREFIX = "visfly/drone_{}/odom"
 TARGET_ODOM_TOPIC = "visfly/target/odom"
-CTRL_FREQ = 33
-INFO_PRINT_FREQ = 30
+
 
 # for real world 
 # TODO: overwrite the ACTION and ODOM topic prefix
