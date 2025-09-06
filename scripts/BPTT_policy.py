@@ -38,7 +38,6 @@ if REAL_WORLD:
 
 import rospy
 from sensor_msgs.msg import Imu
-from mav_msgs.msg import RateThrust
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Vector3
 from quadrotor_msgs.msg import Command
