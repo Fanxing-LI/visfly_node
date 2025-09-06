@@ -1,9 +1,11 @@
 <launch>
   <!-- Parameters -->
   <arg name="cfg_path" default="$(find visfly_node)/config/ekf_cfg.yaml" />
-  <arg name="target_topic" default="vicon/objtarget/odom" />
+  <arg name="target_topic" default="vicon/objtarget3/odom" />
+  <arg name="output_topic" default="/ekf/odom" />
   <node name="ekf_node" pkg="visfly_node" type="visfly_ekf_node" output="screen">
     <param name="cfg_path" value="$(arg cfg_path)" />
     <param name="target_topic" value="$(arg target_topic)" />
+    <param name="output_topic" value="$(arg output_topic)" />
   </node>
 </launch>

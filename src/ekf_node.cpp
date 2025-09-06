@@ -70,8 +70,11 @@ class EKFNode {
 public:
   EKFNode(ros::NodeHandle& nh): nh_(nh), nh_global_(){
     std::string target_topic = "vicon/objtarget/odom";
+    std::string output_topic = "/ekf/odom";
     nh_.param<std::string>("target_topic", target_topic, target_topic);
+    nh_.param<std::string>("output_topic", output_topic, output_topic);
     ROS_INFO_STREAM("Parameter target_topic: " << target_topic);
+    ROS_INFO_STREAM("Parameter output_topic: " << output_topic);
     // Load optional YAML config path
     std::string cfg_path; nh_.param<std::string>("cfg_path", cfg_path, "");
     ROS_INFO_STREAM("Parameter cfg_path: " << cfg_path);
@@ -108,23 +111,24 @@ public:
     if(ma_window_vel_>1) vel_hist_.set_capacity(ma_window_vel_);
 
     odom_sub_ = nh_global_.subscribe(target_topic,10,&EKFNode::odomCb,this);
-    odom_pub_ = nh_global_.advertise<nav_msgs::Odometry>("/ekf/odom",10);
+    odom_pub_ = nh_global_.advertise<nav_msgs::Odometry>(output_topic,10);
 
     ROS_INFO_STREAM("Subscribing to topic: " << target_topic);
-    ROS_INFO_STREAM("Publishing to topic: /ekf/odom");
+    ROS_INFO_STREAM("Publishing to topic: " << output_topic);
 
     // 检查topic是否存在
     ros::master::V_TopicInfo topics;
     ros::master::getTopics(topics);
     bool topic_found = false;
     for(const auto& topic : topics) {
-      if(topic.name.find("vicon/objtarget/odom") != std::string::npos) {
+      if(topic.name == target_topic) {
         topic_found = true;
         ROS_INFO_STREAM("Found input topic: " << topic.name);
+        break;
       }
     }
     if(!topic_found) {
-      ROS_WARN("Input topic vicon/objtarget/odom not found! Available topics:");
+      ROS_WARN_STREAM("Input topic " << target_topic << " not found! Available topics:");
       ros::master::getTopics(topics);
       for(const auto& topic : topics) {
         ROS_WARN_STREAM("  " << topic.name);

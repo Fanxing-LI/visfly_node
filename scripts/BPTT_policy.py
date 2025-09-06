@@ -16,19 +16,28 @@ print(add_path)
 # ONNX model filename (will be combined with current file directory)
 ONNX_MODEL_FILENAME = "SHAC_NoCaliHeadV_Pos_Dis3.0_spd3.4_lessNoise_2_policy.onnx"
 
+DEBUG = True
+REAL_WORLD = True  # Set to True when running in real-world environment
+USE_EKF = True
+
 # Action topic prefix configuration
 ACTION_TOPIC_PREFIX = "BPTT/drone_{}/action"
 ODOM_TOPIC_PREFIX = "visfly/drone_{}/odom"
 TARGET_ODOM_TOPIC = "visfly/target/odom"
-
 INFO_PRINT_FREQ = 30
+
 # for real world 
 # TODO: overwrite the ACTION and ODOM topic prefix
-if False:
-    ACTION_TOPIC_PREFIX = ""
-    ODOM_TOPIC_PREFIX = ""
+if REAL_WORLD:
+    ACTION_TOPIC_PREFIX = "/bfctrl/cmd"
+    ODOM_TOPIC_PREFIX = "/vicon/cc1/odom"
+    OMEGA_TOPIC_PREFIX = "/mavros/imu/data"
+    if USE_EKF:
+        TARGET_ODOM_TOPIC = "ekf/odom"
+
 
 import rospy
+from sensor_msgs.msg import Imu
 from mav_msgs.msg import RateThrust
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Vector3
@@ -49,6 +58,7 @@ try:
     from dynamics import Dynamics
 except ImportError as e:
     from VisFly.envs.base.dynamics import Dynamics
+    
 
 class BPTTPolicy:
     """
@@ -78,6 +88,7 @@ class BPTTPolicy:
         # Store latest odom data
         self.latest_odom = [None] * self.num_agent
         self.latest_target_odom = None  # Store target position information
+        self.latest_imu = [None] # For real-world angular velocity
         
         self.dynamics = Dynamics(cfg="drone_state")
 
@@ -106,7 +117,30 @@ class BPTTPolicy:
         self.target_watchdog_timer = rospy.Timer(rospy.Duration(0.5), self._target_watchdog_callback)
 
         rospy.loginfo(f"BPTT Policy started, managing {self.num_agent} drones")
+    
+    def setup_publishers_and_subscribers(self):
+        """Set up publishers and subscribers"""
 
+        # Create environment status publisher
+        # self.env_status_publisher = rospy.Publisher('visfly/env_status', PoseStamped, queue_size=10)
+
+        for i in range(self.num_agent):
+            # Create Action publisher for each drone using new topic format
+            pub = rospy.Publisher(ACTION_TOPIC_PREFIX.format(i), Command, queue_size=10)
+            self.position_cmd_publishers.append(pub)
+
+            # Create Odometry subscriber for each drone
+            odom_sub = rospy.Subscriber(ODOM_TOPIC_PREFIX.format(i), Odometry, self._make_drone_odom_callback(i))
+            self.odom_subscribers.append(odom_sub)
+
+        # Create global target pose subscriber
+        self.target_odom_subscriber = rospy.Subscriber(TARGET_ODOM_TOPIC, Odometry, self._target_odom_callback)
+        
+        if REAL_WORLD:
+            rospy.loginfo("Real-world mode: Subscribing to real-world topics")
+            # If in real-world mode, subscribe to IMU data for angular velocity
+            self.imu_subscriber = rospy.Subscriber(OMEGA_TOPIC_PREFIX, Imu, self._make_imu_callback(0))
+        
     def _load_onnx_model(self):
         """Load ONNX model"""
         try:
@@ -161,32 +195,12 @@ class BPTTPolicy:
 
     def de_normalize(self, action):
         return self.dynamics._de_normalize(action)
-        
-    def setup_publishers_and_subscribers(self):
-        """Set up publishers and subscribers"""
 
-        # Create environment status publisher
-        self.env_status_publisher = rospy.Publisher('visfly/env_status', PoseStamped, queue_size=10)
-
-        for i in range(self.num_agent):
-            # Create Action publisher for each drone using new topic format
-            pub = rospy.Publisher(ACTION_TOPIC_PREFIX.format(i), Command, queue_size=10)
-            self.position_cmd_publishers.append(pub)
-
-            # Create Odometry subscriber for each drone
-            odom_sub = rospy.Subscriber(f'visfly/drone_{i}/odom', Odometry, self._make_odom_callback(i))
-            self.odom_subscribers.append(odom_sub)
-
-        # Create global target pose subscriber
-        self.target_odom_subscriber = rospy.Subscriber(TARGET_ODOM_TOPIC, Odometry, self._target_odom_callback)
-
-    def _make_odom_callback(self, drone_id):
+    def _make_drone_odom_callback(self, drone_id):
         """Create odom callback function for specific drone"""
         def odom_callback(odom_msg):
             with self.lock:
                 self.latest_odom[drone_id] = odom_msg
-                self._update_env_status(drone_id, odom_msg)
-                self._publish_command(drone_id)
         return odom_callback
 
     def _target_odom_callback(self, target_odom_msg):
@@ -195,90 +209,91 @@ class BPTTPolicy:
             # Update latest target pose
             self.latest_target_odom = target_odom_msg
             self.last_target_odom_time = rospy.Time.now()
-            # Process target pose message, update preprocessed target position
-            self._process_target_odom(target_odom_msg)
 
-    def _process_target_odom(self, target_odom_msg):
+    def _make_imu_callback(self, drone_id):
+        """Create IMU callback function for specific drone"""
+        def imu_callback(imu_msg):
+            with self.lock:
+                self.latest_imu[drone_id] = imu_msg
+        return imu_callback
+        
+    def _process_target_odom(self):
         """Process target pose message, update preprocessed target position"""
+        target_odom_msg = self.latest_target_odom
         if target_odom_msg is not None:
             self.target_pos = th.tensor([
                 target_odom_msg.pose.pose.position.x,
                 target_odom_msg.pose.pose.position.y,
                 target_odom_msg.pose.pose.position.z
             ], dtype=th.float32, device=self.device)
+            self.target_v_world = th.tensor([
+                target_odom_msg.twist.twist.linear.x,
+                target_odom_msg.twist.twist.linear.y,
+                target_odom_msg.twist.twist.linear.z
+            ], dtype=th.float32, device=self.device)
         else:
-            rospy.logwarn("No target pose information received, using default position")
-            self.target_pos = th.tensor([8.0, 8.0, 1.0], dtype=th.float32, device=self.device)
-        if self.pre_target_pos is None:
-            self.pre_target_pos = self.target_pos.clone()
-        self.target_v_world = (self.target_pos-self.pre_target_pos) / 0.03
-        self.pre_target_pos = self.target_pos.clone()
+            rospy.logwarn_throttle(2.0, "No target_odom message received yet")
+            
 
-    def _update_env_status(self, drone_id, odom_msg):
+    def _process_self_odom(self):
         """Update environment status"""
-        # Update position
-        self.env_status['positions'][drone_id] = [
-            odom_msg.pose.pose.position.x,
-            odom_msg.pose.pose.position.y,
-            odom_msg.pose.pose.position.z
-        ]
+        # for drone_id, odom_msg in enumerate(self.latest_odom):
+        for drone_id, (odom_msg, imu_msg) in enumerate(zip(self.latest_odom, self.latest_imu)):
+            # Update position
+            self.env_status['positions'][drone_id] = [
+                odom_msg.pose.pose.position.x,
+                odom_msg.pose.pose.position.y,
+                odom_msg.pose.pose.position.z
+            ]
 
-        # Update velocity
-        self.env_status['velocities'][drone_id] = [
-            odom_msg.twist.twist.linear.x,
-            odom_msg.twist.twist.linear.y,
-            odom_msg.twist.twist.linear.z
-        ]
+            # Update velocity
+            self.env_status['velocities'][drone_id] = [
+                odom_msg.twist.twist.linear.x,
+                odom_msg.twist.twist.linear.y,
+                odom_msg.twist.twist.linear.z
+            ]
 
-        self.env_status['orientations'][drone_id] = [
-            odom_msg.pose.pose.orientation.w,
-            odom_msg.pose.pose.orientation.x,
-            odom_msg.pose.pose.orientation.y,
-            odom_msg.pose.pose.orientation.z,
-        ]
+            self.env_status['orientations'][drone_id] = [
+                odom_msg.pose.pose.orientation.w,
+                odom_msg.pose.pose.orientation.x,
+                odom_msg.pose.pose.orientation.y,
+                odom_msg.pose.pose.orientation.z,
+            ]
 
-        # Update angular velocity
-        self.env_status['angular_velocities'][drone_id] = [
-            odom_msg.twist.twist.angular.x,
-            odom_msg.twist.twist.angular.y,
-            odom_msg.twist.twist.angular.z
-        ]
+            # Update angular velocity
+            self.env_status['angular_velocities'][drone_id] = [
+                imu_msg.angular_velocity.x,
+                imu_msg.angular_velocity.y,
+                imu_msg.angular_velocity.z
+            ]
 
-    def preprocess_input(self, drone_id):
+    def _update_env_status(self):
+        self._process_self_odom()
+        self._process_target_odom()
+        
+    def preprocess_input(self):
         """Preprocess policy input, reference ObjectTrackingEnv's update_target and get_observation"""
-        if self.latest_odom[drone_id] is None:
-            return None
+        for drone_id in range(self.num_agent):
+            if self.latest_odom[drone_id] is None:
+                return None
+            
+            # Get current state
+            position = th.tensor(self.env_status['positions'][drone_id], dtype=th.float32, device=self.device)
+            velocity = th.tensor(self.env_status['velocities'][drone_id], dtype=th.float32, device=self.device)
+            orientation_q = self.env_status['orientations'][drone_id]
+            angular_velocity = th.tensor(self.env_status['angular_velocities'][drone_id], dtype=th.float32, device=self.device)
 
-        # Get current state
-        position = th.tensor(self.env_status['positions'][drone_id], dtype=th.float32, device=self.device)
-        velocity = th.tensor(self.env_status['velocities'][drone_id], dtype=th.float32, device=self.device)
-        orientation_q = self.env_status['orientations'][drone_id]
-        angular_velocity = th.tensor(self.env_status['angular_velocities'][drone_id], dtype=th.float32, device=self.device)
-
-        # Convert ROS quaternion format (x,y,z,w) to VisFly format (w,x,y,z)
-        orientation = Quaternion(
-            w=th.tensor(orientation_q[0], dtype=th.float32, device=self.device),
-            x=th.tensor(orientation_q[1], dtype=th.float32, device=self.device),
-            y=th.tensor(orientation_q[2], dtype=th.float32, device=self.device),
-            z=th.tensor(orientation_q[3], dtype=th.float32, device=self.device)
-        )
+            # Convert ROS quaternion format (x,y,z,w) to VisFly format (w,x,y,z)
+            orientation = Quaternion(
+                w=th.tensor(orientation_q[0], dtype=th.float32, device=self.device),
+                x=th.tensor(orientation_q[1], dtype=th.float32, device=self.device),
+                y=th.tensor(orientation_q[2], dtype=th.float32, device=self.device),
+                z=th.tensor(orientation_q[3], dtype=th.float32, device=self.device)
+            )
 
         # Get target position and velocity from subscribed topic (now using Odometry message)
-        if self.latest_target_odom is not None:
-            target_world = th.tensor([
-                self.latest_target_odom.pose.pose.position.x,
-                self.latest_target_odom.pose.pose.position.y,
-                self.latest_target_odom.pose.pose.position.z
-            ], dtype=th.float32, device=self.device)
-            # Get target velocity from Odometry message
-            if self.pre_target_pos is None:
-                self.pre_target_pos = target_world.clone()
-            target_v_world = self.target_v_world
-        else:
-            # If no target information received, use default position
-            rospy.logwarn_throttle(1.0, "No target position information received, using default position")
-            target_world = th.tensor([8.0, 8.0, 1.0], dtype=th.float32, device=self.device)
-            target_v_world = th.zeros(3, dtype=th.float32, device=self.device)
+        target_world = self.target_pos
+        target_v_world = self.target_v_world
 
         # Calculate relative target position and velocity
         rela_tar = target_world - position
@@ -309,14 +324,15 @@ class BPTTPolicy:
         self.env_status['head_targets_v'][drone_id] = head_targets_v.numpy()
         self.env_status['head_v'][drone_id] = head_v.numpy()
 
+        self.state = state
+        
         return state
 
     def _publish_command(self, drone_id):
         """Publish Command based on BPTT policy, using bodyrate and z-axis acceleration"""
         # Preprocess input
-        state = self.preprocess_input(drone_id)
-        if state is None:
-            return
+        # state = self.preprocess_input(drone_id)
+        state = self.state[drone_id]
 
         # Use ONNX model for inference
         action = self._run_policy_inference(state)
@@ -335,7 +351,7 @@ class BPTTPolicy:
         # - thrust: float64 (single value, not Vector3)
         # - angularVel: geometry_msgs/Vector3 (angular velocity)
 
-        cmd.thrust = action[0]  # z-axis thrust as single value
+        cmd.thrust = action[0] / self.dynamics.m # z-axis thrust as single value
         cmd.angularVel.x = action[1]  # x-axis roll rate
         cmd.angularVel.y = action[2]  # y-axis pitch rate
         cmd.angularVel.z = action[3]  # z-axis yaw rate
@@ -364,20 +380,42 @@ class BPTTPolicy:
     def run(self):
         """Run BPTT Policy node"""
         rospy.loginfo("BPTT Policy starting in event-driven mode")
+        freq = 60
+        rate = rospy.Rate(freq)  # Set rate to 33Hz for any periodic tasks if needed
+        while True:
+            if rospy.is_shutdown():
+                break
+            
+            if self.status_check():
+                self._update_env_status()
+                self.preprocess_input()
+                
+                for drone_id in range(self.num_agent):
+                    self._publish_command(drone_id)
+                rate.sleep()
+
+    def status_check(self):
+        """Check if all necessary data has been received"""
+        with self.lock:
+            if any(odom is None for odom in self.latest_odom):
+                return False
+            if self.latest_target_odom is None:
+                return False
+            if any(imu is None for imu in self.latest_imu):
+                return False
+            return True
         
-        # Use rospy.spin() to enter event loop
-        # All processing is done through callback functions, no active loop needed
-        rospy.spin()
-
-
 def main():
     """
     Main function - Create and run BPTTPolicy
     """
     try:
         # Get agent count from parameter server, default is 4
-        num_agent = rospy.get_param('~num_agent', 4)
-
+        if not REAL_WORLD:
+            num_agent = rospy.get_param('~num_agent', 4)
+        else:
+            num_agent = 1
+            
         policy = BPTTPolicy(num_agent)
         policy.run()
 
