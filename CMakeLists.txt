@@ -100,6 +100,10 @@ find_package(yaml-cpp QUIET)
 ###################################
 ## catkin specific configuration ##
 ###################################
+
+# Add quadrotor_msgs subdirectory
+add_subdirectory(quadrotor_msgs)
+
 ## The catkin_package macro generates cmake config files for your package
 ## Declare things to be passed to dependent projects
 ## INCLUDE_DIRS: uncomment this if your package contains header files

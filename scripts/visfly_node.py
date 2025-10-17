@@ -25,7 +25,6 @@ print(add_path)
 
 import numpy as np
 from std_msgs.msg import Header
-from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud, PointField, PointCloud2
 from tf.transformations import quaternion_from_euler
@@ -33,8 +32,6 @@ import threading
 import argparse
 from exps.vary_v.run import change_v_in_json, env_alias
 from quadrotor_msgs.msg import PositionCommand, Command
-from mav_msgs.msg import RateThrust
-from vision_msgs.msg import ControlCommand
 import torch
 from VisFly.utils.type import ACTION_TYPE
 from sensor_msgs.msg import PointCloud
@@ -60,14 +57,6 @@ ELASTIC_CMD_TOPIC_PREFIX = "/drone{}/debug"
 ELASTIC_ODOM_PREFIX = ODOM_TOPIC_PREFIX # TODO: Finish this section
 ELASTIC_TARGET_ODOM_TOPIC_PREFIX = TARGET_ODOM_TOPIC # TODO: Finish this section
 
-# FSC
-FSC_CMD_TOPIC_PREFIX = "/hummingbird/autopilot/control_command"
-FSC_ODOM_PREFIX = ODOM_TOPIC_PREFIX
-FSC_TARGET_ODOM_TOPIC_PREFIX = TARGET_ODOM_TOPIC
-# FSC_ODOM_TOPIC = "/hummingbird/ground_truth/odometry"
-# FSC_TARGET_TOPIC = "/hummingbird/aprilfake/point"
-# FSC_CONTROL_TOPIC = "/hummingbird/autopilot/control_command"
-# FSC_MOTOR_TOPIC = "/hummingbird/command/motor_speed"
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Run experiments', add_help=False)
@@ -93,8 +82,6 @@ class ROSIndepWrapper:
             assert self.action_type == ACTION_TYPE.POSITION, f"current action type is {self.action_type}, but it should be 'position' for elastic"
         elif comment == "BPTT":
             assert self.action_type == ACTION_TYPE.BODYRATE, f"current action type is {self.action_type}, but it should be 'bodyrate' for BPTT"
-        elif comment == "FSC":
-            assert self.action_type == ACTION_TYPE.BODYRATE, f"current action type is {self.action_type}, but it should be 'bodyrate' for FSC"
         self.comment = comment
 
         self.dynamics = Dynamics(cfg="drone_state")
@@ -135,11 +122,6 @@ class ROSIndepWrapper:
                 self.ex_sim_odom_subs.append(ex_sim_odom_sub)
                 self.ex_sim_odom_reset_pubs.append(ex_sim_odom_reset_pub)
 
-            elif self.comment == "FSC":
-                odom_prefix = FSC_ODOM_PREFIX
-                action_prefix = FSC_CMD_TOPIC_PREFIX  # 使用FSC的正确topic
-                action_sub = rospy.Subscriber(action_prefix, ControlCommand, self._make_action_callback(i))  # 使用ControlCommand
-    
             elif self.comment == "BPTT":
                 odom_prefix = BPTT_ODOM_PREFIX
                 action_prefix = BPTT_CMD_TOPIC_PREFIX
@@ -155,10 +137,6 @@ class ROSIndepWrapper:
             # TODO: 
             target_prefix = ELASTIC_TARGET_ODOM_TOPIC_PREFIX
             self.target_pub = rospy.Publisher(target_prefix, Odometry, queue_size=1)
-            
-        elif self.comment == "FSC":
-            target_prefix = FSC_TARGET_ODOM_TOPIC_PREFIX
-            self.target_pub = rospy.Publisher(target_prefix, PoseStamped, queue_size=1)
             
         elif self.comment == "BPTT":
             target_prefix = BPTT_TARGET_ODOM_TOPIC_PREFIX
@@ -252,12 +230,6 @@ class ROSIndepWrapper:
                         'z_acc': msg.thrust,  # 使用thrust字段
                         'bodyrate': [msg.angularVel.x, msg.angularVel.y, msg.angularVel.z]  # 使用角速度
                     }
-                elif self.comment == "FSC":
-                    # 对于ControlCommand消息：使用collective_thrust和bodyrates
-                    self.action_data[agent_id] = {
-                        'collective_thrust': msg.collective_thrust,  # 使用collective_thrust字段
-                        'bodyrate': [msg.bodyrates.x, msg.bodyrates.y, msg.bodyrates.z]  # 使用bodyrates
-                    }
 
             # if all the action data is received, prepare action for main loop
             if all(a is not None for a in self.action_data):
@@ -278,9 +250,6 @@ class ROSIndepWrapper:
         rospy.loginfo("Starting main control loop...")
         
         # Reset environment
-        # obs = self.env._observations
-        # rospy.loginfo("Environment reset successful")
-        
         if self.comment == "elastic":
             for i in range(200):
                 rospy.sleep(0.01)
@@ -303,8 +272,8 @@ class ROSIndepWrapper:
         
         self.collect_and_process()
         start_obj_pos = copy.deepcopy(env.envs.dynamic_object_position[0].clone())
-        # 30Hz control loop
         
+        # 33Hz control loop
         freq = 33   
         
         rate = rospy.Rate(freq)
@@ -319,7 +288,6 @@ class ROSIndepWrapper:
         step_count = 0
         prev_len = 0
         n_round = 0
-        
         while not rospy.is_shutdown():
             if all(s is not None for s in self.state_data):
                 state = self.process_state()
@@ -372,12 +340,8 @@ class ROSIndepWrapper:
             self.publish_env_status(freq=freq)
             
             # rosinfo the step count
-
-
             rate.sleep()
                 
-
-        
     def collect_and_process(self):
         """
         Collect and process data using SaveNode
@@ -434,13 +398,6 @@ class ROSIndepWrapper:
                     if self.action_data[i] is not None:
                         action_tensor[i, 0] = self.action_data[i]['z_acc']
                         action_tensor[i, 1:4] = torch.tensor(self.action_data[i]['bodyrate'])
-            elif self.comment == "FSC":
-                # Extract collective_thrust and bodyrate components as n*4 tensor
-                action_tensor = torch.zeros(self.num_agent, 4)
-                for i in range(self.num_agent):
-                    if self.action_data[i] is not None:
-                        action_tensor[i, 0] = self.action_data[i]['collective_thrust']  # z-thrust
-                        action_tensor[i, 1:4] = torch.tensor(self.action_data[i]['bodyrate'])  # [roll, pitch, yaw] rates
                 
         self.action_data = [None] * self.num_agent
 
@@ -511,24 +468,8 @@ class ROSIndepWrapper:
         从self.envs.dynamic_object_position获取目标位置
         """
         target_position = self.env.dynamic_object_position[0][0]  # 取第一个作为target位置
-
-        if self.comment == "FSC":
-            # FSC mode: publish target as PoseStamped
-            if self.target_pub is not None:
-                pose_msg = PoseStamped()
-                pose_msg.header.stamp = rospy.Time.now()
-                pose_msg.header.frame_id = self.world_frame
-
-                pose_msg.pose.position.x = target_position[0]
-                pose_msg.pose.position.y = target_position[1]
-                pose_msg.pose.position.z = target_position[2]
-
-                # 默认朝向
-                pose_msg.pose.orientation.w = 1.0
-
-                self.target_pub.publish(pose_msg)
                 
-        elif self.comment == "BPTT":
+        if self.comment == "BPTT":
             # Standard mode: publish target as Odometry
             if self.target_pub is not None:
                 odom_msg = Odometry()
@@ -546,7 +487,7 @@ class ROSIndepWrapper:
                 self.target_pub.publish(odom_msg)
                 
         else:
-                        # Standard mode: publish target as Odometry
+            # Standard mode: publish target as Odometry
             if self.target_pub is not None:
                 odom_msg = Odometry()
                 odom_msg.header.stamp = rospy.Time.now()
@@ -568,7 +509,6 @@ class ROSIndepWrapper:
         发布点云数据
         elastic: 使用PointCloud2 (单个演示点)
         BPTT: 使用PointCloud (单个演示点)
-        FSC: 自定义格式的PointCloud (目标+角点)
         """
         if self.comment == "elastic":
             # 构造一个包含单点的 PointCloud2
@@ -616,117 +556,26 @@ class ROSIndepWrapper:
             point_cloud.points = [example_point]
             self.pointcloud_pub.publish(point_cloud)
 
-        elif self.comment == "FSC":
-            # FSC mode: publish target as PointCloud in camera frame
-            target_position = self.env.dynamic_object_position[0][0]  # 取第一个作为target位置
-            
-            if self.env.state is None:
-                rospy.logwarn("Drone state not available for camera frame conversion")
-                return
-
-            # 获取第一个无人机的状态(FSC只处理单无人机)
-            drone_state = self.env.state[0]  # num_agent * 13
-            
-            # 无人机位置和姿态
-            drone_pos = np.array([drone_state[0], drone_state[1], drone_state[2]])
-            drone_quat = np.array([drone_state[4], drone_state[5], drone_state[6], drone_state[3]])  # xyzw格式
-            
-            # 转换到相机坐标系 - Use FSC-specific transformation
-            target_camera = self.world_to_camera_frame_fsc(target_position, drone_pos, drone_quat)
-            
-            # 创建PointCloud消息
-            point_cloud = PointCloud()
-            point_cloud.header.stamp = rospy.Time.now()
-            # FSC AprilFake doesn't set frame_id - explicitly set to empty string to match expected format
-            point_cloud.header.frame_id = ""
-            
-            # 添加目标点 - Match FSC AprilFake format with 2 points minimum
-            # Point 1: Camera frame target position
-            camera_point = Point32()
-            camera_point.x = float(target_camera[0])
-            camera_point.y = float(target_camera[1])
-            camera_point.z = float(target_camera[2])
-            
-            # Point 2: Global frame target position (required by FSC)
-            global_point = Point32()
-            global_point.x = float(target_position[0])
-            global_point.y = float(target_position[1])
-            global_point.z = float(target_position[2])
-            
-            # Points 3-6: AprilTag corner points in image coordinates (fake but necessary)
-            # Based on official FSC data: corners around center of image
-            center_u, center_v = 376.0, 240.0  # Typical image center
-            tag_size = 12.0  # Half-width of AprilTag in pixels
-            
-            corner1 = Point32()
-            corner1.x = center_u - tag_size
-            corner1.y = center_v + tag_size  
-            corner1.z = 1.0
-            
-            corner2 = Point32()
-            corner2.x = center_u + tag_size
-            corner2.y = center_v + tag_size
-            corner2.z = 1.0
-            
-            corner3 = Point32()
-            corner3.x = center_u + tag_size
-            corner3.y = center_v - tag_size
-            corner3.z = 1.0
-            
-            corner4 = Point32()
-            corner4.x = center_u - tag_size
-            corner4.y = center_v - tag_size
-            corner4.z = 1.0
-            
-            point_cloud.points = [camera_point, global_point, corner1, corner2, corner3, corner4]
-            
-            # Debug: Log FSC target data for troubleshooting "point unavailable" issue
-            # rospy.loginfo_throttle(2.0, f"FSC Target Debug - Camera frame: [{target_camera[0]:.3f}, {target_camera[1]:.3f}, {target_camera[2]:.3f}] | "
-            #                             f"Global frame: [{target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f}] | "
-            #                             f"Drone pos: [{drone_pos[0]:.3f}, {drone_pos[1]:.3f}, {drone_pos[2]:.3f}] | "
-            #                             f"Points count: {len(point_cloud.points)} | "
-            #                             f"Camera Z>0: {target_camera[2] > 0}")
-
-            self.pointcloud_pub.publish(point_cloud)
-
-    def world_to_camera_frame_fsc(self, target_world, drone_pos, drone_quat):
-        """
-        FSC-specific camera frame transformation using exact AprilFake projToCam logic
-        """
-        # FSC camera extrinsics from aprilfake_params.yaml
-        t_B_C = np.array([0.0, 0.0, 0.15])  # Camera 15cm UP from body center
-        q_B_C = R.from_quat([-0.5, 0.5, -0.5, 0.5])  # [x,y,z,w] format, FSC uses [w,x,y,z]=[0.5,-0.5,0.5,-0.5]
-        
-        # Step 1: Transform target to drone body frame
-        # p_lb_b = orient.inverse() * (target - pos)
-        drone_rotation = R.from_quat(drone_quat)  # xyzw format
-        p_lb_b = drone_rotation.inv().apply(target_world - drone_pos)
-        
-        # Step 2: Transform from body frame to camera frame 
-        # p_lc_c = q_B_C_.inverse() * (p_lb_b - t_B_C_)
-        target_camera = q_B_C.inv().apply(p_lb_b - t_B_C)
-        
-        return target_camera
-
 
 def get_env(velocity, trajectory, distance=3.0, algorithm="BPTT"):
-    proj_path = os.path.dirname(os.path.abspath(__file__)).split("obj_track")[0] + "obj_track/"
-    env_config = load_yaml_config(proj_path + f'exps/vary_v/env_cfgs/objTracking.yaml')
-    env_config["eval_env"]["scene_kwargs"]["obj_settings"]["path"] = \
-        proj_path + 'exps/vary_v/configs/obj/' + trajectory
+    # proj_path = os.path.dirname(os.path.abspath(__file__)).split("obj_track")[0] + "obj_track/"
+    # env_config = load_yaml_config(proj_path + f'exps/vary_v/env_cfgs/objTracking.yaml')
+    # env_config["eval_env"]["scene_kwargs"]["obj_settings"]["path"] = \
+    #     proj_path + 'exps/vary_v/configs/obj/' + trajectory
 
-    # Modify action type for elastic mode
-    if algorithm == "elastic":
-        env_config["eval_env"]["dynamics_kwargs"] = env_config["eval_env"].get("dynamics_kwargs", {})
-        env_config["eval_env"]["dynamics_kwargs"]["action_type"] = "position"
-        print(f"[INFO] Modified action_type to 'position' for elastic mode")
-    # env_config["eval_env"]["visual"] = False
-    change_v_in_json(trajectory, velocity, distance)
+    # # Modify action type for elastic mode
+    # # if algorithm == "elastic":
+    # #     env_config["eval_env"]["dynamics_kwargs"] = env_config["eval_env"].get("dynamics_kwargs", {})
+    # #     env_config["eval_env"]["dynamics_kwargs"]["action_type"] = "position"
+    # #     print(f"[INFO] Modified action_type to 'position' for elastic mode")
+    # # env_config["eval_env"]["visual"] = False
+    # change_v_in_json(trajectory, velocity, distance)
 
-    eval_env = env_alias["objTracking"](
-        **env_config["eval_env"]
-    )
-
+    # eval_env = env_alias["objTracking"](
+    #     **env_config["eval_env"]
+    # )
+    from exps.vary_v.run import main
+    eval_env = main(velocity=velocity, traj=trajectory, distance=distance, ROS=True)
     return eval_env
 
 
@@ -741,7 +590,7 @@ if __name__ == '__main__':
         obj_track_path = current_abs_path.split('obj_track')[0] + 'obj_track'
         save_path = f"{obj_track_path}/exps/vary_v/saved/objTracking/test/{args.traj}_{args.velocity}_{args.comment}_Dis3.0"
 
-        assert args.comment in ["BPTT", "elastic", "FSC"]
+        assert args.comment in ["BPTT", "elastic"]
         print(f"Environment created: {env.__class__}")
         node = ROSIndepWrapper(env, path=save_path, comment=args.comment)
         

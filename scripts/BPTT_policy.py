@@ -16,14 +16,14 @@ print(add_path)
 
 # ONNX model filename (will be combined with current file directory)
 ONNX_MODEL_FILENAME = "SHAC_NoCaliHeadV_Pos_Dis3.0_spd3.4_lessNoise_2_policy.onnx"
-ONNX_MODEL_FILENAME = "SHAC_deploy_5_policy.onnx"
+# ONNX_MODEL_FILENAME = "SHAC_deploy_5_policy.onnx"
 
-DEBUG = True
-REAL_WORLD = True  # Set to True when running in real-world environment
-USE_EKF = True
+DEBUG = False
+REAL_WORLD = False  # Set to True when running in real-world environment
+USE_EKF = False
 
-CTRL_FREQ = 30
-INFO_PRINT_FREQ = 30
+CTRL_FREQ = 33
+INFO_PRINT_FREQ = CTRL_FREQ
 
 # ===================================================================================
 
@@ -31,7 +31,6 @@ INFO_PRINT_FREQ = 30
 ACTION_TOPIC_PREFIX = "BPTT/drone_{}/action"
 ODOM_TOPIC_PREFIX = "visfly/drone_{}/odom"
 TARGET_ODOM_TOPIC = "visfly/target/odom"
-
 
 # for real world 
 # TODO: overwrite the ACTION and ODOM topic prefix
@@ -240,6 +239,8 @@ class BPTTPolicy:
         else:
             rospy.logwarn_throttle(2.0, "No target_odom message received yet")
             
+        self.last_target_odom = None  # Clear after processing
+            
 
     def _process_self_odom(self):
         """Update environment status"""
@@ -267,35 +268,45 @@ class BPTTPolicy:
             ]
 
             # Update angular velocity
-            self.env_status['angular_velocities'][drone_id] = [
-                imu_msg.angular_velocity.x,
-                imu_msg.angular_velocity.y,
-                imu_msg.angular_velocity.z
-            ]
-
+            if not REAL_WORLD:
+                self.env_status['angular_velocities'][drone_id] = [
+                    odom_msg.twist.twist.angular.x,
+                    odom_msg.twist.twist.angular.y,
+                    odom_msg.twist.twist.angular.z
+                ]
+            else:
+                self.env_status['angular_velocities'][drone_id] = [
+                    imu_msg.angular_velocity.x,
+                    imu_msg.angular_velocity.y,
+                    imu_msg.angular_velocity.z
+                ]
+                
+            self.latest_imu[drone_id] = None  # Clear IMU data after processing
+            self.latest_odom[drone_id] = None  # Clear odom data after processing
+            
     def _update_env_status(self):
         self._process_self_odom()
         self._process_target_odom()
         
     def preprocess_input(self):
         """Preprocess policy input, reference ObjectTrackingEnv's update_target and get_observation"""
-        for drone_id in range(self.num_agent):
-            if self.latest_odom[drone_id] is None:
-                return None
+        # for drone_id in range(self.num_agent):
+        #     if self.latest_odom[drone_id] is None:
+        #         return None
             
-            # Get current state
-            position = th.tensor(self.env_status['positions'][drone_id], dtype=th.float32, device=self.device)
-            velocity = th.tensor(self.env_status['velocities'][drone_id], dtype=th.float32, device=self.device)
-            orientation_q = self.env_status['orientations'][drone_id]
-            angular_velocity = th.tensor(self.env_status['angular_velocities'][drone_id], dtype=th.float32, device=self.device)
+        # Get current state
+        position = th.tensor(self.env_status['positions'], dtype=th.float32, device=self.device)
+        velocity = th.tensor(self.env_status['velocities'], dtype=th.float32, device=self.device)
+        orientation_q = self.env_status['orientations'].T
+        angular_velocity = th.tensor(self.env_status['angular_velocities'], dtype=th.float32, device=self.device)
 
-            # Convert ROS quaternion format (x,y,z,w) to VisFly format (w,x,y,z)
-            orientation = Quaternion(
-                w=th.tensor(orientation_q[0], dtype=th.float32, device=self.device),
-                x=th.tensor(orientation_q[1], dtype=th.float32, device=self.device),
-                y=th.tensor(orientation_q[2], dtype=th.float32, device=self.device),
-                z=th.tensor(orientation_q[3], dtype=th.float32, device=self.device)
-            )
+        # Convert ROS quaternion format (x,y,z,w) to VisFly format (w,x,y,z)
+        orientation = Quaternion(
+            w=th.tensor(orientation_q[0], dtype=th.float32, device=self.device),
+            x=th.tensor(orientation_q[1], dtype=th.float32, device=self.device),
+            y=th.tensor(orientation_q[2], dtype=th.float32, device=self.device),
+            z=th.tensor(orientation_q[3], dtype=th.float32, device=self.device)
+        )
 
         # Get target position and velocity from subscribed topic (now using Odometry message)
         target_world = self.target_pos
@@ -306,14 +317,14 @@ class BPTTPolicy:
         rela_v = target_v_world - velocity
 
         # Use VisFly's quaternion method to calculate target position and velocity in head coordinate system
-        head_targets = orientation.world_to_head(rela_tar.unsqueeze(0).T).T
+        head_targets = orientation.world_to_head(rela_tar.T).T
         # if self._count % 20 == 0:
         #     print(orientation)
-        head_targets_v = orientation.world_to_head(rela_v.unsqueeze(0).T).T
-        head_v = orientation.world_to_head(velocity.unsqueeze(0).T).T
+        head_targets_v = orientation.world_to_head(rela_v.T).T
+        head_v = orientation.world_to_head(velocity.T).T
 
         # Get quaternion's 4 components as orientation features, reference ObjectTrackingEnv
-        orientation_vec = th.atleast_2d(orientation.toTensor().to(self.device))  # Convert to tensor format
+        orientation_vec = th.atleast_2d(orientation.toTensor().T.to(self.device))  # Convert to tensor format
         angular_velocity = th.atleast_2d(angular_velocity)
         # print all cat variable shape
         # Build state vector, reference ObjectTrackingEnv's get_observation
@@ -326,9 +337,9 @@ class BPTTPolicy:
         ])  # Total 16 dimensions
 
         # Update environment status for publishing
-        self.env_status['head_targets'][drone_id] = head_targets.numpy()
-        self.env_status['head_targets_v'][drone_id] = head_targets_v.numpy()
-        self.env_status['head_v'][drone_id] = head_v.numpy()
+        self.env_status['head_targets'] = head_targets.numpy()
+        self.env_status['head_targets_v'] = head_targets_v.numpy()
+        self.env_status['head_v'] = head_v.numpy()
 
         self.state = state
         
@@ -357,7 +368,11 @@ class BPTTPolicy:
         # - thrust: float64 (single value, not Vector3)
         # - angularVel: geometry_msgs/Vector3 (angular velocity)
 
-        cmd.thrust = action[0] / self.dynamics.m # z-axis thrust as single value
+        if REAL_WORLD:
+            # In real-world, convert z-acceleration to z-thrust using mass
+            action[0] = action[0] / self.dynamics.m  # f = m * a_z
+        else:
+            cmd.thrust = action[0] # / self.dynamics.m # z-axis thrust as single value
         cmd.angularVel.x = action[1]  # x-axis roll rate
         cmd.angularVel.y = action[2]  # y-axis pitch rate
         cmd.angularVel.z = action[3]  # z-axis yaw rate
@@ -406,8 +421,8 @@ class BPTTPolicy:
                 return False
             if self.latest_target_odom is None:
                 return False
-            if any(imu is None for imu in self.latest_imu):
-                return False
+            # if any(imu is None for imu in self.latest_imu):
+            #     return False
             return True
         
 def main():
@@ -417,7 +432,7 @@ def main():
     try:
         # Get agent count from parameter server, default is 4
         if not REAL_WORLD:
-            num_agent = rospy.get_param('~num_agent', 4)
+            num_agent = rospy.get_param('~num_agent', 1)
         else:
             num_agent = 1
             

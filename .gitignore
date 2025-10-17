@@ -209,3 +209,34 @@ __marimo__/
 # .onnx
 *.onnx
 **.onnx
+
+**/*.mp4
+**/*.avi
+**/*.jpg
+**/*.pdf
+**/*.png
+**/*.onnx
+
+**/saved/
+examples/
+
+**/*.pyc
+**/__pycache__/
+**/*.pyo
+
+**/*.pt
+
+# ignore tensorboard log event file
+*.tfevents.*
+
+# ros pkg
+devel/
+build/
+logs/
+
+# rosbag
+*.bag
+*.bag.active
+*.bag.partial
+*.db3
+*.db-journal
