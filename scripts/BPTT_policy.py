@@ -25,8 +25,6 @@ USE_EKF = False
 CTRL_FREQ = 33
 INFO_PRINT_FREQ = CTRL_FREQ
 
-# ===================================================================================
-
 # Action topic prefix configuration
 ACTION_TOPIC_PREFIX = "BPTT/drone_{}/action"
 ODOM_TOPIC_PREFIX = "visfly/drone_{}/odom"
@@ -38,9 +36,10 @@ if REAL_WORLD:
     ACTION_TOPIC_PREFIX = "/bfctrl/cmd"
     ODOM_TOPIC_PREFIX = "/vicon/cc1/odom"
     OMEGA_TOPIC_PREFIX = "/mavros/imu/data"
-    if USE_EKF:
-        TARGET_ODOM_TOPIC = "ekf/odom"
+if USE_EKF:
+    TARGET_ODOM_TOPIC = "ekf/odom"
 
+# ===================================================================================
 
 import rospy
 from sensor_msgs.msg import Imu

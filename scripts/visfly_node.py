@@ -274,12 +274,11 @@ class ROSIndepWrapper:
         start_obj_pos = copy.deepcopy(env.envs.dynamic_object_position[0].clone())
         
         # 33Hz control loop
-        freq = 33   
+        freq = 100
         
         rate = rospy.Rate(freq)
         self.action_ready = False
         self.state_ready = False
-        self.pending_action = None
         
         # Publish initial state
         
@@ -332,7 +331,7 @@ class ROSIndepWrapper:
                     rospy.loginfo("All environments done. Exiting...")
                     self.save()
                     break
-                    
+                
                 if step_count % freq == 0:
                     rospy.loginfo(f"Step count: {step_count}")
                     
@@ -468,7 +467,7 @@ class ROSIndepWrapper:
         从self.envs.dynamic_object_position获取目标位置
         """
         target_position = self.env.dynamic_object_position[0][0]  # 取第一个作为target位置
-                
+        target_velocity = self.env.envs.dynamic_object_velocity[0][0]
         if self.comment == "BPTT":
             # Standard mode: publish target as Odometry
             if self.target_pub is not None:
@@ -480,6 +479,10 @@ class ROSIndepWrapper:
                 odom_msg.pose.pose.position.x = target_position[0]
                 odom_msg.pose.pose.position.y = target_position[1]
                 odom_msg.pose.pose.position.z = target_position[2]
+                
+                odom_msg.twist.twist.linear.x = target_velocity[0]
+                odom_msg.twist.twist.linear.y = target_velocity[1]
+                odom_msg.twist.twist.linear.z = target_velocity[2]
 
                 # 默认朝向
                 odom_msg.pose.pose.orientation.w = 1.0
