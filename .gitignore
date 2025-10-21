@@ -240,3 +240,6 @@ logs/
 *.bag.partial
 *.db3
 *.db-journal
+
+/vscode/
+/.vscode/

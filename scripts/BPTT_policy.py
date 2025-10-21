@@ -92,7 +92,7 @@ class BPTTPolicy:
         # Store latest odom data
         self.latest_odom = [None] * self.num_agent
         self.latest_target_odom = None  # Store target position information
-        self.latest_imu = [None] # For real-world angular velocity
+        self.latest_imu = [None] * self.num_agent # For real-world angular velocity
         
         self.dynamics = Dynamics(cfg="drone_state")
 
