@@ -36,7 +36,7 @@ class SaveNode:
         obs = env._observations
         self._img_names = [name for name in obs.keys() if (("color" in name) or ("depth" in name) or ("semantic" in name))]
         self.max_semantic_id = 1e-6
-        self.FPS = int(1/env.envs.dynamics.dt) 
+        self.FPS = int(1/env.envs.dynamics.ctrl_dt)
         
         # Store initial observation
         self.stack(env)
@@ -141,6 +141,8 @@ class SaveNode:
         if self.render_image_all:
             video_folder_path = pth_path.replace('.pth', '') if pth_path.endswith('.pth') else pth_path
             self.save_video(video_folder_path)
+
+        self.save_fig(save_path)
                 
         # Remove image data to save space if requested
         if remove_images:
@@ -159,12 +161,11 @@ class SaveNode:
             "collision_all": getattr(self, 'collision_all', []),
             "reward_all": getattr(self, 'reward_all', []),
             "action_all": getattr(self, 'action_all', []),
-            "target_dis_all": getattr(self, 'target_dis_all', []),
-            "center_all": getattr(self, 'box_center_all'),
             # "info_all": getattr(self, 'info_all', [])  # Commented out like in original
         }
         
         th.save(save_data, pth_path)
+        
                 
         print("======================================================================")
         print(f"Test results saved to {pth_path}")
@@ -175,6 +176,43 @@ class SaveNode:
         print("======================================================================")
         
         return save_data
+
+    def save_fig(self, base_path):
+        """
+        Save render images as individual figure files
+
+        Args:
+            base_path: Base path for creating figure folder and saving images
+        """
+        if not self.render_image_all:
+            print("No render images to save as figures")
+            return
+
+        # Create folder for figures (using base_path as folder name)
+        fig_folder = base_path
+        if not os.path.exists(fig_folder):
+            os.makedirs(fig_folder)
+
+        state = th.stack(self.state_all).squeeze()
+        from VisFly.utils.FigFashion.FigFashion import FigFon
+        FigFon.set_fashion("IEEE")
+        t = th.stack(self.t_all).squeeze()
+        fig, axes = FigFon.get_figure_axes(SubFigSize=(2,2), Column=1)
+        axes[0,0].plot(t.cpu().numpy(), state[:,:3].cpu().numpy())
+        axes[0,0].set_xlabel("Time (s)")
+        axes[0, 0].set_title("Position")
+        axes[0,1].plot(t.cpu().numpy(), state[:,3:7].cpu().numpy())
+        axes[0,1].set_xlabel("Time (s)")
+        axes[0, 1].set_title("Orientation (Quaternion)")
+        axes[1,0].plot(t.cpu().numpy(), state[:,7:10].cpu().numpy())
+        axes[1,0].set_xlabel("Time (s)")
+        axes[1, 0].set_title("Velocity")
+        axes[1,1].plot(t.cpu().numpy(), state[:,10:13].cpu().numpy())
+        axes[1,1].set_xlabel("Time (s)")
+        axes[1, 1].set_title("Angular Velocity")
+        fig_path = f"{fig_folder}/state_over_time.png"
+        fig.savefig(fig_path, dpi=300)
+        print(f"State over time figure saved in {fig_path}")
 
     def save_video(self, base_path, is_sub_video=True):
         """
@@ -199,7 +237,7 @@ class SaveNode:
         video_path = f"{video_folder}/video.mp4"
         
         # Calculate FPS from stored time data
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fourcc = cv2.VideoWriter_fourcc(*'avc1')
         fps = self.FPS
         video = cv2.VideoWriter(video_path, fourcc, fps, (width, height))
         
@@ -225,7 +263,7 @@ class SaveNode:
                 for i, name in enumerate(self._img_names):
                     if name in obs:
                         if "depth" in name:
-                            max_depth = 10
+                            max_depth = 10 if obs[name].max()>=1 else 1
                             img = np.clip(np.hstack(np.transpose(obs[name], (0, 2, 3, 1))), None, max_depth)
                             img = (cv2.cvtColor(img, cv2.COLOR_GRAY2RGB) * 255 / max_depth).astype(np.uint8)
                             video_obs[i].write(img)
