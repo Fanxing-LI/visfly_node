@@ -318,7 +318,6 @@ class ROSIndepWrapper:
             depth_msg.is_bigendian = 0
             depth_msg.step = depth.shape[1] * 4  # 4 bytes per
             depth_msg.data = depth.astype(np.float32).tobytes()
-            
             self.drone_camera_pubs[i].publish(depth_msg)
             
 

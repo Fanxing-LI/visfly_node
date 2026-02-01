@@ -341,8 +341,8 @@ class BPTTPolicy:
 
         # self.state = state
 
-        dim = 30
-        k1 = 6
+        dim = 40
+        k1 = 8
         obs = {
             "state":state.unsqueeze(0).numpy(),
             # "depth": flex_max_pool(depth_preprocess(flex_max_pool(np.expand_dims(self.depth_image,0), k1)), int(dim / k1)).unsqueeze(0).numpy()
